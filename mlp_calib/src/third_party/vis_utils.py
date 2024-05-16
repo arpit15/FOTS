@@ -5,6 +5,12 @@ import logging
 import time
 import types
 
+import collections
+import collections.abc
+for type_name in collections.abc.__all__:
+    setattr(collections, type_name, getattr(collections.abc, type_name))
+
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np

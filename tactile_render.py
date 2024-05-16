@@ -18,7 +18,7 @@ def get_simapproach():
     ini_bg_mlp = np.load('./utils/utils_data/ini_bg_fots_gelsight.npy')
     # load mlp model
     model = MLP().to(device)
-    model.load_state_dict(torch.load("./mlp_calib/models/mlp_n2c_gelsight.pth"))
+    model.load_state_dict(torch.load("./mlp_calib/models/mlp_n2c_gelsight.pth", map_location=device))
     model.to(device)
 
     simulation = FOTSRender(

@@ -2,6 +2,7 @@ import cv2
 import time
 import numpy as np
 import open3d as o3d
+from time import time
 
 from tactile_render import get_simapproach
 from utils.marker_motion import MarkerMotion
@@ -18,17 +19,24 @@ rot = [0, 0, 0]
 
 if __name__=="__main__":
     # Read the stl file as a mesh
-    mesh = o3d.io.read_triangle_mesh("assets/daniel/cylinder.stl")
+    start = time()
+    mesh = o3d.io.read_triangle_mesh("assets/daniel/cylinder_shell.stl")
     gel_pad = np.load("utils/utils_data/"+s_type+"_pad.npy")
     model_center = mesh.get_center()
+    load_time = time()
+    print(f"load time: {load_time-start}")
 
     R = mesh.get_rotation_matrix_from_xyz(rot) 
     mesh.rotate(R, center=[0,0,0]) 
-    mesh.compute_vertex_normals 
+    # mesh.compute_vertex_normals 
+    transform_time = time()
+    print(f"transform time: {transform_time-load_time}")
 
     # Sample points from the mesh
     # pcd = mesh.sample_points_poisson_disk(number_of_points=1000000, init_factor=1)
     pcd = mesh.sample_points_uniformly(number_of_points=1000000)
+    sample_time = time()
+    print(f"sample time: {sample_time-transform_time}")
     # o3d.visualization.draw_geometries([pcd]) 
     vertices = np.asarray(pcd.points)
 
@@ -39,52 +47,68 @@ if __name__=="__main__":
     cx = 0.0#model_center[0]#np.mean(vertices[:,0])
     cy = 0.0#model_center[1]#np.mean(vertices[:,1])
 
+    print(f"total time before sim: {time()-start}")
+    print("Simulating")
+    for i in range(100):
+        print("Depth: ", 0.01*i)
+        trans[2] = 0.01*i
+        rot[2] = 0.01*i
+
     # add the shifting and change to the pix coordinate
-    uu = ((vertices[:,0] - cx + trans[0])*mm_to_pixel + psp_w//2).astype(int)
-    vv = ((vertices[:,1] - cy + trans[1])*mm_to_pixel + psp_h//2).astype(int)
-    # check boundary of the image
-    mask_u = np.logical_and(uu > 0, uu < psp_w)
-    mask_v = np.logical_and(vv > 0, vv < psp_h)
-    # check the depth
-    mask_z = vertices[:,2] > 10
-    mask_map = mask_u & mask_v & mask_z
-    heightMap[vv[mask_map],uu[mask_map]] = vertices[mask_map][:,2]*mm_to_pixel
+        uu = ((vertices[:,0] - cx + trans[0])*mm_to_pixel + psp_w//2).astype(int)
+        vv = ((vertices[:,1] - cy + trans[1])*mm_to_pixel + psp_h//2).astype(int)
+        # check boundary of the image
+        mask_u = np.logical_and(uu > 0, uu < psp_w)
+        mask_v = np.logical_and(vv > 0, vv < psp_h)
+        # check the depth
+        mask_z = vertices[:,2] > 10
+        mask_map = mask_u & mask_v & mask_z
+        heightMap[vv[mask_map],uu[mask_map]] = vertices[mask_map][:,2]*mm_to_pixel
 
-    heightMap += gel_pad*mm_to_pixel
+        heightMap += gel_pad*mm_to_pixel
 
-    max_o = np.max(heightMap)
-    gel_map = np.ones((psp_h, psp_w)) * max_o
-    # pressing depth in pixel
-    pressing_height_pix = trans[2]*mm_to_pixel
+        max_o = np.max(heightMap)
+        gel_map = np.ones((psp_h, psp_w)) * max_o
+        # pressing depth in pixel
+        pressing_height_pix = trans[2]*mm_to_pixel
 
-    # shift the gelpad to interact with the object
-    gel_map -= pressing_height_pix
+        # shift the gelpad to interact with the object
+        gel_map -= pressing_height_pix
 
-    # get the contact area
-    contact_mask = heightMap > gel_map
+        # get the contact area
+        contact_mask = heightMap > gel_map
 
-    # combine contact area of object shape with non contact area of gelpad shape
-    zq = np.zeros((psp_h,psp_w))
+        # combine contact area of object shape with non contact area of gelpad shape
+        zq = np.zeros((psp_h,psp_w))
 
-    zq[contact_mask]  = heightMap[contact_mask]
-    zq[~contact_mask] = gel_map[~contact_mask]
-    zq -= gel_map
-    # render height map to tactile img
-    simulation = get_simapproach()
-    tact_img = simulation.generate(zq, contact_mask)
+        zq[contact_mask]  = heightMap[contact_mask]
+        zq[~contact_mask] = gel_map[~contact_mask]
+        zq -= gel_map
+        # render height map to tactile img
+        simulation = get_simapproach()
+        tact_img = simulation.generate(zq, contact_mask)
 
-    # obtain object's relative pose
-    relative_pos = []
-    if np.max(trans[2])>0.0:
-        relative_pos.append([0, 0, 0])
-        relative_pos.append([trans[0], trans[1], rot[2]])
-    # obtain markers' motion according to depth and object geometry info
-    marker = MarkerMotion(frame0_blur=tact_img,depth=zq/mm_to_pixel,mask=contact_mask,traj=relative_pos,
-                          lamb=[0.00125,0.00021,0.00038])
-    marker_img = marker._marker_motion()
+        # obtain object's relative pose
+        relative_pos = []
+        if np.max(trans[2])>0.0:
+            relative_pos.append([0, 0, 0])
+            relative_pos.append([trans[0], trans[1], rot[2]])
+        # obtain markers' motion according to depth and object geometry info
+        marker = MarkerMotion(frame0_blur=tact_img,depth=zq/mm_to_pixel,mask=contact_mask,traj=relative_pos,
+                            lamb=[0.00125,0.00021,0.00038])
+        marker_img = marker._marker_motion()
 
-    cv2.imshow("tact_img",tact_img)
-    cv2.imshow("mask_img", contact_mask.astype(np.uint8)*255)
-    cv2.imshow("marker_img", marker_img)
-    cv2.waitKey(0)
+        # concatenate tact_img, contact_mask, marker_img
+        contact_vis = contact_mask.astype(np.uint8)*255
+        contact_vis = np.dstack((contact_vis, contact_vis, contact_vis))
+        vis_img = np.hstack((tact_img, contact_vis, marker_img))
+
+        # cv2.imshow("tact_img",tact_img)
+        # cv2.imshow("mask_img", contact_mask.astype(np.uint8)*255)
+        # cv2.imshow("marker_img", marker_img)
+        cv2.imshow("generated artifacts", vis_img)
+        # while True:
+        #     if cv2.waitKey(1) & 0xFF == ord('q'):
+        #         break
+        cv2.waitKey(5)
     cv2.destroyAllWindows()
